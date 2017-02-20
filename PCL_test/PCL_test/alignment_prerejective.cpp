@@ -6,6 +6,10 @@
 
 #define GEN_MATRIX_DEBUG 0	// by ancre
 
+#define COMPUTE_NORMAL_FEATURE 1	// by ancre
+
+#define POSE_ESTIMATION_TUTORIAL_SETTING 0	// by ancre
+
 #include <Eigen/Core>
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
@@ -42,7 +46,12 @@ enum ROTATE { X = 0, Y, Z, UNKNOW };
 
 typedef pcl::PointXYZRGB PointColor; // by ancre
 
+#if COMPUTE_NORMAL_FEATURE==0 // only X Y Z
+typedef pcl::PointXYZ PointNT;
+#else // have normal vector
 typedef pcl::PointNormal PointNT;
+#endif
+
 typedef pcl::PointCloud<PointNT> PointCloudT;
 typedef pcl::FPFHSignature33 FeatureT;
 typedef pcl::FPFHEstimationOMP<PointNT,PointNT,FeatureT> FeatureEstimationT;
@@ -151,6 +160,7 @@ bool LoadPointCloudFromFile(const std::string a_sFileName, PointCloudT::Ptr a_pt
 	return 0;
 }
 
+#if COMPUTE_NORMAL_FEATURE > 0
 bool LoadPointCloudFromFile(const std::string a_sFileName, pcl::PointCloud<pcl::PointXYZ>::Ptr a_ptPointCloudData)
 {
 	// Fetch point cloud filename in arguments | Works with PCD and PLY files
@@ -178,6 +188,7 @@ bool LoadPointCloudFromFile(const std::string a_sFileName, pcl::PointCloud<pcl::
 	}
 	return 0;
 }
+#endif
 
 Eigen::Matrix4f GetRotateMatrix(const float a_fTheta, int a_Mode)
 {
@@ -441,21 +452,31 @@ int main (int argc, char **argv)
 	// Load object and scene
 	pcl::console::print_highlight("Loading point clouds...\n");
 
-	bool bObject = LoadPointCloudFromFile("toy.ply", object);
-	bool bScene = LoadPointCloudFromFile("toy_transformed.ply", scene);
+	/*bool bObject = LoadPointCloudFromFile("toy.ply", object);
+	bool bScene = LoadPointCloudFromFile("toy_transformed.ply", scene);*/
+
+	bool bObject = LoadPointCloudFromFile("0.ply", object);
+	bool bScene = LoadPointCloudFromFile("180.ply", scene);
 
 	if (!bObject || !bScene)
 	{	// loading fail
 		return -1;
 	}
 
+#if 0 // test by ancre
 	pcl::io::savePCDFileASCII("test_log.pcd", *object); // test log by ancre
 	pcl::io::savePLYFileASCII("test_log.ply", *object); // test log by ancre
+#endif
 
 	// Downsample
 	pcl::console::print_highlight ("Downsampling...\n");
 	pcl::VoxelGrid<PointNT> grid;
+
+#if POSE_ESTIMATION_TUTORIAL_SETTING > 0 // original setting
 	const float leaf = 0.005f;
+#else  // ancre test
+	const float leaf = 0.04f;
+#endif
 	grid.setLeafSize (leaf, leaf, leaf);
 	grid.setInputCloud (object);
 	grid.filter (*object);
@@ -463,53 +484,120 @@ int main (int argc, char **argv)
 	grid.filter (*scene);
 
 #if 1 // test by ancre
+	pcl::visualization::PCLVisualizer visu_t0("scene");
+	visu_t0.addPointCloud(scene, ColorHandlerT(scene, 0.0, 255.0, 0.0), "scene");
+	visu_t0.spin();
+
+	pcl::visualization::PCLVisualizer visu_t2("object");
+	visu_t2.addPointCloud(object, ColorHandlerT(object, 255.0, 0.0, 0.0), "object");
+	visu_t2.spin();
+
+
 	pcl::visualization::PCLVisualizer visu_t1("diff");
 	visu_t1.addPointCloud(scene, ColorHandlerT(scene, 0.0, 255.0, 0.0), "scene");
 	visu_t1.addPointCloud(object, ColorHandlerT(object, 255.0, 0.0, 0.0), "object");
 	visu_t1.spin();
 #endif
 
+#if	COMPUTE_NORMAL_FEATURE > 0
 	// Estimate normals for scene
 	pcl::console::print_highlight ("Estimating scene normals...\n");
 	pcl::NormalEstimationOMP<PointNT,PointNT> nest;
-	// nest.setRadiusSearch (0.01);
-	nest.setRadiusSearch(0.005);
+#if POSE_ESTIMATION_TUTORIAL_SETTING > 0 // original setting
+	nest.setRadiusSearch (0.01);
+#else // ancre test
+	nest.setRadiusSearch(0.1);
+#endif
 	nest.setInputCloud (scene);
 	nest.compute (*scene);
+
+#if 1 // test by ancre
+	// Estimate normals for object
+	pcl::console::print_highlight("Estimating object normals...\n");
+	pcl::NormalEstimationOMP<PointNT, PointNT> nest_object;
+#if POSE_ESTIMATION_TUTORIAL_SETTING > 0 // original setting
+	nest_object.setRadiusSearch (0.01);
+#else // ancre test
+	nest_object.setRadiusSearch(0.1); // ancre test
+#endif
+	nest_object.setInputCloud(object);
+	nest_object.compute(*object);
+#endif
   
 	// Estimate features
 	pcl::console::print_highlight ("Estimating features...\n");
 	FeatureEstimationT fest;
-	// fest.setRadiusSearch (0.025);
-	fest.setRadiusSearch(0.015); // ancre test
+#if POSE_ESTIMATION_TUTORIAL_SETTING > 0 // original setting
+	fest.setRadiusSearch (0.025);
+#else // ancre test
+	fest.setRadiusSearch(0.04);
+#endif
 	fest.setInputCloud (object);
 	fest.setInputNormals (object);
 	fest.compute (*object_features);
 	fest.setInputCloud (scene);
 	fest.setInputNormals (scene);
 	fest.compute (*scene_features);
+
+#endif
+
   
 	// Perform alignment
-	pcl::console::print_highlight ("Starting alignment...\n");
+	pcl::console::print_highlight("Starting alignment...\n");
+
+#if 1 // original: pose estimation tutorial
+	
 	pcl::SampleConsensusPrerejective<PointNT,PointNT,FeatureT> align;
 	align.setInputSource (object);
 	align.setSourceFeatures (object_features);
 	align.setInputTarget (scene);
 	align.setTargetFeatures (scene_features);
-	// align.setMaximumIterations (50000); // Number of RANSAC iterations
-	align.setMaximumIterations(2000); // Number of RANSAC iterations >>>>> ancre test
+
+#if POSE_ESTIMATION_TUTORIAL_SETTING > 0 // original setting: tutorial's parameter
+	align.setMaximumIterations(50000); // Number of RANSAC iterations
+	align.setNumberOfSamples(3); // Number of points to sample for generating/prerejecting a pose
+	align.setCorrespondenceRandomness(5); // Number of nearest features to use
+	align.setSimilarityThreshold(0.9f); // Polygonal edge length similarity threshold
+	align.setMaxCorrespondenceDistance(2.5f * leaf); // Inlier threshold
+	align.setInlierFraction(0.25f); // Required inlier fraction for accepting a pose hypothesis
+#else // my parameter
+	align.setMaximumIterations (2000); // Number of RANSAC iterations
 	align.setNumberOfSamples (3); // Number of points to sample for generating/prerejecting a pose
 	align.setCorrespondenceRandomness (5); // Number of nearest features to use
 	align.setSimilarityThreshold (0.9f); // Polygonal edge length similarity threshold
-	align.setSimilarityThreshold(0.9f); // Polygonal edge length similarity threshold >>>>> ancre test
 	align.setMaxCorrespondenceDistance (2.5f * leaf); // Inlier threshold
 	align.setInlierFraction (0.25f); // Required inlier fraction for accepting a pose hypothesis
+#endif
+
+#else // by Interactive Iterative Closest Point (ICP) tutorial
+
+#if 0
+	pcl::SampleConsensusPrerejective<PointNT, PointNT, FeatureT> align;
+	align.setInputSource(object);
+	align.setSourceFeatures(object_features);
+	align.setInputTarget(scene);
+	align.setTargetFeatures(scene_features);
+	align.setMaximumIterations(5000); // Number of RANSAC iterations
+	// align.setSimilarityThreshold(0.9f); // Polygonal edge length similarity threshold
+	// align.setMaxCorrespondenceDistance(1.5f * leaf); // Inlier threshold
+	// align.setInlierFraction (0.25f); // Required inlier fraction for accepting a pose hypothesis
+
+#else
+	pcl::IterativeClosestPoint<PointNT, PointNT> align;
+	align.setMaximumIterations(10000);
+	align.setInputSource(object);
+	align.setInputTarget(scene);
+	// align.align(*cloud_icp);
+#endif
+
+#endif
 	{
 		pcl::ScopeTime t("Alignment");
 		align.align (*object_aligned);
 	}
   
-	if (align.hasConverged ())
+	// if (align.hasConverged ())
+	if (1)
 	{
 		// Print results
 		printf ("\n");
@@ -521,6 +609,7 @@ int main (int argc, char **argv)
 		pcl::console::print_info ("t = < %0.3f, %0.3f, %0.3f >\n", transformation (0,3), transformation (1,3), transformation (2,3));
 		pcl::console::print_info ("\n");
 		pcl::console::print_info ("Inliers: %i/%i\n", align.getInliers().size(), object->size());
+		// std::cout << "\nICP has converged, score is " << align.getFitnessScore() << "    " << "object point number:" << object->size() <<  std::endl;
     
 		// Show alignment
 		pcl::visualization::PCLVisualizer visu("Alignment");
